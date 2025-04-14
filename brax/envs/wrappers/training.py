@@ -254,6 +254,48 @@ class ProgressWrapper(Wrapper):
         return state.replace(pipeline_state=new_pipeline_state)  # type: ignore
 
 
+class EvalWrapperProgress(Wrapper):
+    """Brax env with eval metrics."""
+
+    def reset(self, rng: jax.Array, progress: jax.numpy.ndarray) -> State:
+        reset_state = self.env.reset(rng, progress=progress)
+        reset_state.metrics["reward"] = reset_state.reward
+        eval_metrics = EvalMetrics(
+            episode_metrics=jax.tree_util.tree_map(jp.zeros_like, reset_state.metrics),
+            active_episodes=jp.ones_like(reset_state.reward),
+            episode_steps=jp.zeros_like(reset_state.reward),
+        )
+        reset_state.info["eval_metrics"] = eval_metrics
+        return reset_state
+
+    def step(self, state: State, action: jax.Array) -> State:
+        state_metrics = state.info["eval_metrics"]
+        if not isinstance(state_metrics, EvalMetrics):
+            raise ValueError(f"Incorrect type for state_metrics: {type(state_metrics)}")
+        del state.info["eval_metrics"]
+        nstate = self.env.step(state, action)
+        nstate.metrics["reward"] = nstate.reward
+        episode_steps = jp.where(
+            state_metrics.active_episodes,
+            nstate.info["steps"],
+            state_metrics.episode_steps,
+        )
+        episode_metrics = jax.tree_util.tree_map(
+            lambda a, b: a + b * state_metrics.active_episodes,
+            state_metrics.episode_metrics,
+            nstate.metrics,
+        )
+        active_episodes = state_metrics.active_episodes * (1 - nstate.done)
+
+        eval_metrics = EvalMetrics(
+            episode_metrics=episode_metrics,
+            active_episodes=active_episodes,
+            episode_steps=episode_steps,
+        )
+        nstate.info["eval_metrics"] = eval_metrics
+        return nstate
+
+
 def wrap_progress(
     env: Env,
     episode_length: int = 1000,

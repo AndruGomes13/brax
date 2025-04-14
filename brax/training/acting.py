@@ -183,7 +183,7 @@ class EvaluatorProgress:
         self._key = key
         self._eval_walltime = 0.0
 
-        eval_env = envs.training.EvalWrapperProgressMINE(eval_env)
+        eval_env = envs.training.EvalWrapperProgress(eval_env)
 
         def generate_eval_unroll(
             policy_params: PolicyParams, key: PRNGKey, progress: jax.numpy.ndarray
