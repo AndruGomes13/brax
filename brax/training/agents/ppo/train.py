@@ -24,6 +24,10 @@ from typing import Any, Callable, Mapping, Optional, Tuple, Union
 from absl import logging
 from brax import base
 from brax import envs
+from brax.envs.wrappers.training import (
+    CurriculumProgressInfo,
+    broadcast_curriculum_progress_info,
+)
 from brax.training import acting
 from brax.training import gradients
 from brax.training import logger as metric_logger
@@ -310,6 +314,16 @@ def train(
     Returns:
       Tuple of (make_policy function, network params, metrics)
     """
+
+    # --- NOTE: Mine ---
+    def replicate_across_devices(tree, n_devices):
+        return jax.tree_util.tree_map(
+            lambda x: jnp.broadcast_to(x, (n_devices,) + x.shape),
+            tree,
+        )
+
+    # ---
+
     assert batch_size * num_minibatches % num_envs == 0
     _validate_madrona_args(
         madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
@@ -380,9 +394,17 @@ def train(
     # env_state = reset_fn(key_envs)
 
     # -- NOTE: Mine --
-    progress_shape = key_envs.shape[:-1]
-    progress_batched = jax.numpy.full(progress_shape, jax.numpy.array(0.0))
-    env_state = reset_fn(key_envs, progress_batched)
+    curriculum_progress_shape = key_envs.shape[:-1]
+    curriculum_progress_info = CurriculumProgressInfo(
+        training_progress=jax.numpy.array(0.0),
+        avg_episode_length=jax.numpy.array(0.0),
+        avg_episode_reward=jax.numpy.array(0.0),
+    )
+
+    curriculum_progress_info_batched = replicate_across_devices(
+        curriculum_progress_info, local_devices_to_use
+    )
+    env_state = reset_fn(key_envs, curriculum_progress_info_batched)
     # --
 
     # Discard the batch axes over devices and envs.
@@ -694,7 +716,7 @@ def train(
                 )
             ),
             training_metrics={},
-            progress=jax.numpy.array(0.0),
+            curriculum_progress_info=curriculum_progress_info,
         )
         # ---
         logging.info(metrics)
@@ -705,7 +727,23 @@ def train(
     current_step = 0
     for it in range(num_evals_after_init):
         logging.info("starting iteration %s %s", it, time.time() - xt)
-        progress = float(it / num_evals_after_init)  # NOTE: MINE
+        # --- NOTE: MINE ---
+        training_progress = float(it / num_evals_after_init)
+        curriculum_progress_info = CurriculumProgressInfo(
+            training_progress=jax.numpy.array(training_progress),
+            avg_episode_length=jax.numpy.array(
+                metrics.get("eval/avg_episode_length", 0)
+            ),
+            avg_episode_reward=jax.numpy.array(
+                metrics.get("eval/episode_reward", -jax.numpy.inf)
+            ),
+        )
+        curriculum_progress_info_batched = replicate_across_devices(
+            curriculum_progress_info, local_devices_to_use
+        )
+
+        env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+        # ---
         for _ in range(max(num_resets_per_eval, 1)):
             # optimization
             epoch_key, local_key = jax.random.split(local_key)
@@ -722,9 +760,8 @@ def train(
             # env_state = reset_fn(key_envs) if num_resets_per_eval > 0 else env_state
 
             # --- NOTE: MINE ---
-            progress_batched = jax.numpy.full(progress_shape, jax.numpy.array(progress))
             env_state = (
-                reset_fn(key_envs, progress_batched)
+                reset_fn(key_envs, curriculum_progress_info_batched)
                 if num_resets_per_eval > 0
                 else env_state
             )
@@ -760,7 +797,9 @@ def train(
             # )
             # --- NOTE: MINE ---
             metrics = evaluator.run_evaluation(
-                params, training_metrics, progress=jax.numpy.array(progress)
+                params,
+                training_metrics,
+                curriculum_progress_info=curriculum_progress_info,
             )
             # ---
             logging.info(metrics)

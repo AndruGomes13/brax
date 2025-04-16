@@ -15,7 +15,8 @@
 # pylint:disable=g-multiple-import, g-importing-member
 """Wrappers to support Brax training."""
 
-from typing import Callable, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Callable, Dict, NamedTuple, Optional, Tuple
 
 from brax.base import System
 from brax.envs.base import Env, State, Wrapper
@@ -245,20 +246,42 @@ class DomainRandomizationVmapWrapper(Wrapper):
 
 
 # --- NOTE: Mine ---
+class CurriculumProgressInfo(NamedTuple):
+    training_progress: jp.ndarray
+    avg_episode_length: jp.ndarray
+    avg_episode_reward: jp.ndarray
+
+
+def broadcast_curriculum_progress_info(
+    curriculum_progress_info: CurriculumProgressInfo, batch_shape
+) -> CurriculumProgressInfo:
+    broadcast_fn = lambda x: jp.full(batch_shape, x)
+    # Apply this function to all leaves in the curriculum_progress_info Pytree
+    return jax.tree_util.tree_map(broadcast_fn, curriculum_progress_info)
+
+
 class ProgressWrapper(Wrapper):
-    def reset(self, rng, progress):
+    def reset(self, rng, curriculum_info: CurriculumProgressInfo):
         state = self.env.reset(rng)
         batch_shape = rng.shape[:-1]
-        progress_batched = jax.numpy.full(batch_shape, progress)
-        new_pipeline_state = state.pipeline_state._replace(progress=progress_batched)  # type: ignore
-        return state.replace(pipeline_state=new_pipeline_state)  # type: ignore
+        curriculum_info_batched = broadcast_curriculum_progress_info(
+            curriculum_info, batch_shape
+        )
+        new_pipeline_state = state.pipeline_state._replace(
+            progress=curriculum_info_batched
+        )  # type: ignore
+        state = state.replace(pipeline_state=new_pipeline_state)
+        state.info["first_pipeline_state"] = (
+            new_pipeline_state  # This overwrites the first pipeline state defined in the autoreset wrapper
+        )
+        return state  # type: ignore
 
 
 class EvalWrapperProgress(Wrapper):
     """Brax env with eval metrics."""
 
-    def reset(self, rng: jax.Array, progress: jax.numpy.ndarray) -> State:
-        reset_state = self.env.reset(rng, progress=progress)
+    def reset(self, rng: jax.Array, curriculum_info: CurriculumProgressInfo) -> State:
+        reset_state = self.env.reset(rng, curriculum_info)
         reset_state.metrics["reward"] = reset_state.reward
         eval_metrics = EvalMetrics(
             episode_metrics=jax.tree_util.tree_map(jp.zeros_like, reset_state.metrics),

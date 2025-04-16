@@ -18,6 +18,7 @@ import time
 from typing import Callable, Sequence, Tuple
 
 from brax import envs
+from brax.envs.wrappers.training import CurriculumProgressInfo
 from brax.training.types import Metrics
 from brax.training.types import Policy
 from brax.training.types import PolicyParams
@@ -186,10 +187,12 @@ class EvaluatorProgress:
         eval_env = envs.training.EvalWrapperProgress(eval_env)
 
         def generate_eval_unroll(
-            policy_params: PolicyParams, key: PRNGKey, progress: jax.numpy.ndarray
+            policy_params: PolicyParams,
+            key: PRNGKey,
+            curriculum_progress_info: CurriculumProgressInfo,
         ) -> State:
             reset_keys = jax.random.split(key, num_eval_envs)
-            eval_first_state = eval_env.reset(reset_keys, progress)
+            eval_first_state = eval_env.reset(reset_keys, curriculum_progress_info)
             return generate_unroll(
                 eval_env,
                 eval_first_state,
@@ -205,14 +208,16 @@ class EvaluatorProgress:
         self,
         policy_params: PolicyParams,
         training_metrics: Metrics,
-        progress: jax.numpy.ndarray,
+        curriculum_progress_info: CurriculumProgressInfo,
         aggregate_episodes: bool = True,
     ) -> Metrics:
         """Run one epoch of evaluation."""
         self._key, unroll_key = jax.random.split(self._key)
 
         t = time.time()
-        eval_state = self._generate_eval_unroll(policy_params, unroll_key, progress)
+        eval_state = self._generate_eval_unroll(
+            policy_params, unroll_key, curriculum_progress_info
+        )
         eval_metrics = eval_state.info["eval_metrics"]
         eval_metrics.active_episodes.block_until_ready()
         epoch_eval_time = time.time() - t
