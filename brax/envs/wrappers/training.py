@@ -258,6 +258,10 @@ class CurriculumProgressInfo:
     def get_default(cls) -> Self:
         return cls(jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(0.0))
 
+    @classmethod
+    def get_default_with_progress(cls, progress: float):
+        return cls(jp.array(progress), jp.array(0.0), jp.array(0.0), jp.array(0.0))
+
 
 def broadcast_curriculum_progress_info(
     curriculum_progress_info: CurriculumProgressInfo, batch_shape
