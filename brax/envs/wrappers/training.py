@@ -16,7 +16,7 @@
 """Wrappers to support Brax training."""
 
 from dataclasses import dataclass
-from typing import Callable, Dict, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, NamedTuple, Optional, Self, Tuple
 
 from brax.base import System
 from brax.envs.base import Env, State, Wrapper
@@ -246,10 +246,17 @@ class DomainRandomizationVmapWrapper(Wrapper):
 
 
 # --- NOTE: Mine ---
-class CurriculumProgressInfo(NamedTuple):
+# @dataclass(frozen=True)
+@struct.dataclass
+class CurriculumProgressInfo:
     training_progress: jp.ndarray
+    total_steps: jp.ndarray
     avg_episode_length: jp.ndarray
     avg_episode_reward: jp.ndarray
+
+    @classmethod
+    def get_default(cls) -> Self:
+        return cls(jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(0.0))
 
 
 def broadcast_curriculum_progress_info(
@@ -262,18 +269,35 @@ def broadcast_curriculum_progress_info(
 
 class ProgressWrapper(Wrapper):
     def reset(self, rng, curriculum_info: CurriculumProgressInfo):
-        state = self.env.reset(rng)
+        base_state = self.env.reset(rng)
+
         batch_shape = rng.shape[:-1]
         curriculum_info_batched = broadcast_curriculum_progress_info(
             curriculum_info, batch_shape
         )
-        new_pipeline_state = state.pipeline_state._replace(
-            progress=curriculum_info_batched
-        )  # type: ignore
-        state = state.replace(pipeline_state=new_pipeline_state)
-        state.info["first_pipeline_state"] = (
-            new_pipeline_state  # This overwrites the first pipeline state defined in the autoreset wrapper
-        )
+
+        # Curriculum resample
+        if hasattr(self.env, "reset_with_progress"):
+
+            def _reset_one(key):
+                return self.env.reset_with_progress(key, curriculum_info)
+
+            prog_state = jax.vmap(_reset_one)(rng)
+            # prog_state = self.env.reset_with_progress(rng, curriculum_info)
+
+            # splice only the bits that truly depend on curriculum
+            state = base_state.replace(
+                pipeline_state=prog_state.pipeline_state,
+                obs=prog_state.obs,
+            )
+
+        else:
+            state = base_state
+
+        pipeline_state = state.pipeline_state._replace(progress=curriculum_info_batched)
+        state = state.replace(pipeline_state=pipeline_state)
+
+        state.info["first_pipeline_state"] = pipeline_state
         return state  # type: ignore
 
 

@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+USE_MINE = False
+
+
 """Proximal policy optimization training.
 
 See: https://arxiv.org/pdf/1707.06347.pdf
@@ -124,8 +127,10 @@ def _maybe_wrap_env(
     if wrap_env_fn is not None:
         wrap_for_training = wrap_env_fn
     else:
-        wrap_for_training = envs.training.wrap_progress  # NOTE: MINE
-        # wrap_for_training = envs.training.wrap
+        if USE_MINE:
+            wrap_for_training = envs.training.wrap_progress  # NOTE: MINE
+        else:
+            wrap_for_training = envs.training.wrap
     env = wrap_for_training(
         env,
         episode_length=episode_length,
@@ -391,20 +396,23 @@ def train(
     reset_fn = jax.jit(jax.vmap(env.reset))
     key_envs = jax.random.split(key_env, num_envs // process_count)
     key_envs = jnp.reshape(key_envs, (local_devices_to_use, -1) + key_envs.shape[1:])
-    # env_state = reset_fn(key_envs)
 
     # -- NOTE: Mine --
-    curriculum_progress_shape = key_envs.shape[:-1]
-    curriculum_progress_info = CurriculumProgressInfo(
-        training_progress=jax.numpy.array(0.0),
-        avg_episode_length=jax.numpy.array(0.0),
-        avg_episode_reward=jax.numpy.array(0.0),
-    )
+    if USE_MINE:
+        curriculum_progress_shape = key_envs.shape[:-1]
+        curriculum_progress_info = CurriculumProgressInfo(
+            training_progress=jax.numpy.array(0.0),
+            total_steps=jax.numpy.array(0.0),
+            avg_episode_length=jax.numpy.array(0.0),
+            avg_episode_reward=jax.numpy.array(0.0),
+        )
 
-    curriculum_progress_info_batched = replicate_across_devices(
-        curriculum_progress_info, local_devices_to_use
-    )
-    env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+        curriculum_progress_info_batched = replicate_across_devices(
+            curriculum_progress_info, local_devices_to_use
+        )
+        env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+    else:
+        env_state = reset_fn(key_envs)
     # --
 
     # Discard the batch axes over devices and envs.
@@ -674,51 +682,56 @@ def train(
         wrap_env_fn=wrap_env_fn,
         randomization_fn=randomization_fn,
     )
-    # evaluator = acting.Evaluator(
-    #     eval_env,
-    #     functools.partial(make_policy, deterministic=deterministic_eval),
-    #     num_eval_envs=num_eval_envs,
-    #     episode_length=episode_length,
-    #     action_repeat=action_repeat,
-    #     key=eval_key,
-    # )
-    # --- NOTE: MINE ---
-    evaluator = acting.EvaluatorProgress(
-        eval_env,
-        functools.partial(make_policy, deterministic=deterministic_eval),
-        num_eval_envs=num_eval_envs,
-        episode_length=episode_length,
-        action_repeat=action_repeat,
-        key=eval_key,
-    )
+    if USE_MINE:
+        # --- NOTE: MINE ---
+        evaluator = acting.EvaluatorProgress(
+            eval_env,
+            functools.partial(make_policy, deterministic=deterministic_eval),
+            num_eval_envs=num_eval_envs,
+            episode_length=episode_length,
+            action_repeat=action_repeat,
+            key=eval_key,
+        )
     # ---
+    else:
+        evaluator = acting.Evaluator(
+            eval_env,
+            functools.partial(make_policy, deterministic=deterministic_eval),
+            num_eval_envs=num_eval_envs,
+            episode_length=episode_length,
+            action_repeat=action_repeat,
+            key=eval_key,
+        )
 
     # Run initial eval
     metrics = {}
     if process_id == 0 and num_evals > 1:
-        # metrics = evaluator.run_evaluation(
-        #     _unpmap(
-        #         (
-        #             training_state.normalizer_params,
-        #             training_state.params.policy,
-        #             training_state.params.value,
-        #         )
-        #     ),
-        #     training_metrics={},
-        # )
-        # --- NOTE: MINE ---
-        metrics = evaluator.run_evaluation(
-            _unpmap(
-                (
-                    training_state.normalizer_params,
-                    training_state.params.policy,
-                    training_state.params.value,
-                )
-            ),
-            training_metrics={},
-            curriculum_progress_info=curriculum_progress_info,
-        )
-        # ---
+        if USE_MINE:
+            # --- NOTE: MINE ---
+            metrics = evaluator.run_evaluation(
+                _unpmap(
+                    (
+                        training_state.normalizer_params,
+                        training_state.params.policy,
+                        training_state.params.value,
+                    )
+                ),
+                training_metrics={},
+                curriculum_progress_info=curriculum_progress_info,
+            )
+            # ---
+        else:
+            metrics = evaluator.run_evaluation(
+                _unpmap(
+                    (
+                        training_state.normalizer_params,
+                        training_state.params.policy,
+                        training_state.params.value,
+                    )
+                ),
+                training_metrics={},
+            )
+
         logging.info(metrics)
         progress_fn(0, metrics)
 
@@ -727,23 +740,28 @@ def train(
     current_step = 0
     for it in range(num_evals_after_init):
         logging.info("starting iteration %s %s", it, time.time() - xt)
-        # --- NOTE: MINE ---
-        training_progress = float(it / num_evals_after_init)
-        curriculum_progress_info = CurriculumProgressInfo(
-            training_progress=jax.numpy.array(training_progress),
-            avg_episode_length=jax.numpy.array(
-                metrics.get("eval/avg_episode_length", 0)
-            ),
-            avg_episode_reward=jax.numpy.array(
-                metrics.get("eval/episode_reward", -jax.numpy.inf)
-            ),
-        )
-        curriculum_progress_info_batched = replicate_across_devices(
-            curriculum_progress_info, local_devices_to_use
-        )
+        if USE_MINE:
+            # --- NOTE: MINE ---
+            training_progress = float(it / num_evals_after_init)
+            curriculum_progress_info = CurriculumProgressInfo(
+                training_progress=jax.numpy.array(training_progress),
+                total_steps=jax.numpy.array(current_step),
+                avg_episode_length=jax.numpy.array(
+                    metrics.get("eval/avg_episode_length", 0)
+                ),
+                avg_episode_reward=jax.numpy.array(
+                    metrics.get("eval/episode_reward", -jax.numpy.inf)
+                ),
+            )
+            curriculum_progress_info_batched = replicate_across_devices(
+                curriculum_progress_info, local_devices_to_use
+            )
 
-        env_state = reset_fn(key_envs, curriculum_progress_info_batched)
-        # ---
+            env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+            # ---
+        else:
+            env_state = reset_fn(key_envs)
+
         for _ in range(max(num_resets_per_eval, 1)):
             # optimization
             epoch_key, local_key = jax.random.split(local_key)
@@ -757,15 +775,17 @@ def train(
                 lambda x, s: jax.random.split(x[0], s), in_axes=(0, None)
             )(key_envs, key_envs.shape[1])
             # TODO: move extra reset logic to the AutoResetWrapper.
-            # env_state = reset_fn(key_envs) if num_resets_per_eval > 0 else env_state
 
-            # --- NOTE: MINE ---
-            env_state = (
-                reset_fn(key_envs, curriculum_progress_info_batched)
-                if num_resets_per_eval > 0
-                else env_state
-            )
-            # ---
+            if USE_MINE:
+                # --- NOTE: MINE ---
+                env_state = (
+                    reset_fn(key_envs, curriculum_progress_info_batched)
+                    if num_resets_per_eval > 0
+                    else env_state
+                )
+                # ---
+            else:
+                env_state = reset_fn(key_envs) if num_resets_per_eval > 0 else env_state
 
         if process_id != 0:
             continue
@@ -781,9 +801,25 @@ def train(
 
         policy_params_fn(current_step, make_policy, params)
 
+        # --- NOTE: MINE ---
+        def specs2py(tree):
+            def _to_py(s: specs.Array):
+                shp = s.shape
+                # if it’s a 1‑D spec like (D,), return int D
+                if len(shp) == 1:
+                    return shp[0]
+                # otherwise return the full tuple
+                return tuple(shp)
+
+            return jax.tree_util.tree_map(_to_py, tree)
+
+        obs_shape_tuple = specs2py(obs_shape)
+        # ----
+
         if save_checkpoint_path is not None:
             ckpt_config = checkpoint.network_config(
-                observation_size=obs_shape,
+                # observation_size=obs_shape,
+                observation_size=obs_shape_tuple,  # --- NOTE: MINE ---
                 action_size=env.action_size,
                 normalize_observations=normalize_observations,
                 network_factory=network_factory,
@@ -791,17 +827,20 @@ def train(
             checkpoint.save(save_checkpoint_path, current_step, params, ckpt_config)
 
         if num_evals > 0:
-            # metrics = evaluator.run_evaluation(
-            #     params,
-            #     training_metrics,
-            # )
-            # --- NOTE: MINE ---
-            metrics = evaluator.run_evaluation(
-                params,
-                training_metrics,
-                curriculum_progress_info=curriculum_progress_info,
-            )
-            # ---
+            if USE_MINE:
+                # --- NOTE: MINE ---
+                metrics = evaluator.run_evaluation(
+                    params,
+                    training_metrics,
+                    curriculum_progress_info=curriculum_progress_info,
+                )
+                # ---
+            else:
+                metrics = evaluator.run_evaluation(
+                    params,
+                    training_metrics,
+                )
+
             logging.info(metrics)
             progress_fn(current_step, metrics)
 
