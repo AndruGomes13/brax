@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-USE_MINE = False
+USE_MINE = True
 
 
 """Proximal policy optimization training.
@@ -393,28 +393,31 @@ def train(
         wrap_env_fn,
         randomization_fn,
     )
-    reset_fn = jax.jit(jax.vmap(env.reset))
+    if USE_MINE:
+        reset_fn = jax.jit(jax.vmap(env.reset, (0, None)))
+    else:
+        reset_fn = jax.jit(jax.vmap(env.reset))
+
     key_envs = jax.random.split(key_env, num_envs // process_count)
     key_envs = jnp.reshape(key_envs, (local_devices_to_use, -1) + key_envs.shape[1:])
 
-    # -- NOTE: Mine --
+    # # -- NOTE: Mine --
+    # print("--- before reset ---")
+    # print(environment.sys.density)
+    # print(env._sys_v.density)
+    # print(environment._sys_v.density)
     if USE_MINE:
-        curriculum_progress_shape = key_envs.shape[:-1]
-        curriculum_progress_info = CurriculumProgressInfo(
-            training_progress=jax.numpy.array(0.0),
-            total_steps=jax.numpy.array(0.0),
-            avg_episode_length=jax.numpy.array(0.0),
-            avg_episode_reward=jax.numpy.array(0.0),
-        )
-
-        curriculum_progress_info_batched = replicate_across_devices(
-            curriculum_progress_info, local_devices_to_use
-        )
-        env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+        curriculum_progress_info = CurriculumProgressInfo.get_default()
+        env_state = reset_fn(key_envs, curriculum_progress_info)
     else:
         env_state = reset_fn(key_envs)
-    # --
-
+    # # --
+    # print("--- After reset ---")
+    # print(environment.sys.viscosity)
+    # print(environment.sys.density)
+    # # print(env._sys_v.density)
+    # # print(environment._sys_v.density)
+    # exit()
     # Discard the batch axes over devices and envs.
     obs_shape = jax.tree_util.tree_map(lambda x: x.shape[2:], env_state.obs)
 
