@@ -291,7 +291,7 @@ class ProgressWrapper(Wrapper):
         else:
             state = base_state
 
-        pipeline_state = state.pipeline_state._replace(progress=curriculum_info)
+        pipeline_state = state.pipeline_state.replace(progress=curriculum_info)
         state = state.replace(pipeline_state=pipeline_state)
         state.info["first_pipeline_state"] = pipeline_state
         return state
