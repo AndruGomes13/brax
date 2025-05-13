@@ -401,23 +401,13 @@ def train(
     key_envs = jax.random.split(key_env, num_envs // process_count)
     key_envs = jnp.reshape(key_envs, (local_devices_to_use, -1) + key_envs.shape[1:])
 
-    # # -- NOTE: Mine --
-    # print("--- before reset ---")
-    # print(environment.sys.density)
-    # print(env._sys_v.density)
-    # print(environment._sys_v.density)
+    # -- NOTE: Mine --
     if USE_MINE:
         curriculum_progress_info = CurriculumProgressInfo.get_default()
         env_state = reset_fn(key_envs, curriculum_progress_info)
     else:
         env_state = reset_fn(key_envs)
-    # # --
-    # print("--- After reset ---")
-    # print(environment.sys.viscosity)
-    # print(environment.sys.density)
-    # # print(env._sys_v.density)
-    # # print(environment._sys_v.density)
-    # exit()
+
     # Discard the batch axes over devices and envs.
     obs_shape = jax.tree_util.tree_map(lambda x: x.shape[2:], env_state.obs)
 
