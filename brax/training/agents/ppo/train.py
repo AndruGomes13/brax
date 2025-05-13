@@ -320,15 +320,6 @@ def train(
       Tuple of (make_policy function, network params, metrics)
     """
 
-    # --- NOTE: Mine ---
-    def replicate_across_devices(tree, n_devices):
-        return jax.tree_util.tree_map(
-            lambda x: jnp.broadcast_to(x, (n_devices,) + x.shape),
-            tree,
-        )
-
-    # ---
-
     assert batch_size * num_minibatches % num_envs == 0
     _validate_madrona_args(
         madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
@@ -746,11 +737,8 @@ def train(
                     metrics.get("eval/episode_reward", -jax.numpy.inf)
                 ),
             )
-            curriculum_progress_info_batched = replicate_across_devices(
-                curriculum_progress_info, local_devices_to_use
-            )
 
-            env_state = reset_fn(key_envs, curriculum_progress_info_batched)
+            env_state = reset_fn(key_envs, curriculum_progress_info)
             # ---
         else:
             env_state = reset_fn(key_envs)
