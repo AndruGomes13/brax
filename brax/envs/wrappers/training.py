@@ -132,12 +132,12 @@ class EpisodeWrapper(Wrapper):
             state, metrics_acc = carry
             new_state = self.env.step(state, action)
 
-            new_metrics_acc = jax.tree_map(
+            new_metrics_acc = jax.tree.map(
                 lambda acc, m: acc + m, metrics_acc, new_state.metrics
             )
             return (new_state, new_metrics_acc), new_state.reward
 
-        zeros_metrics = jax.tree_map(lambda m: jp.zeros_like(m), state.metrics)
+        zeros_metrics = jax.tree.map(lambda m: jp.zeros_like(m), state.metrics)
         (state, summed_metrics), rewards = jax.lax.scan(
             f, (state, zeros_metrics), (), self.action_repeat
         )
