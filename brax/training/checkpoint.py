@@ -15,11 +15,13 @@
 """Checkpointing functions."""
 
 import inspect
+import json
 import logging
 from typing import Any, Dict, Tuple, Union
 
 from brax.training import types
 from brax.training.acme import running_statistics
+from brax.training.agents.bc import networks as bc_networks
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.sac import networks as sac_networks
 from etils import epath
@@ -52,7 +54,11 @@ def network_config(
     action_size: int,
     normalize_observations: bool,
     network_factory: types.NetworkFactory[
-        Union[ppo_networks.PPONetworks, sac_networks.SACNetworks]
+        Union[
+            bc_networks.BCNetworks,
+            ppo_networks.PPONetworks,
+            sac_networks.SACNetworks,
+        ]
     ],
 ) -> config_dict.ConfigDict:
   """Returns a config dict for re-creating a network from a checkpoint."""
@@ -86,9 +92,15 @@ def network_config(
 def get_network(
     config: config_dict.ConfigDict,
     network_factory: types.NetworkFactory[
-        Union[ppo_networks.PPONetworks, sac_networks.SACNetworks]
+        Union[
+            bc_networks.BCNetworks,
+            ppo_networks.PPONetworks,
+            sac_networks.SACNetworks,
+        ]
     ],
-) -> Union[ppo_networks.PPONetworks, sac_networks.SACNetworks]:
+) -> Union[
+    bc_networks.BCNetworks, ppo_networks.PPONetworks, sac_networks.SACNetworks
+]:
   """Generates a network given config."""
   normalize = lambda x, y: x
   if config.normalize_observations:
@@ -121,7 +133,7 @@ def save(
   orbax_checkpointer.save(ckpt_path, params, force=True, save_args=save_args)
 
   config_path = ckpt_path / config_fname
-  config_path.write_text(config.to_json())
+  config_path.write_text(config.to_json_best_effort())
 
 
 def load(
@@ -145,3 +157,13 @@ def load(
   target[0] = running_statistics.RunningStatisticsState(**target[0])
 
   return target
+
+
+def load_config(
+    config_path: Union[str, epath.Path],
+) -> config_dict.ConfigDict:
+  """Loads config from config path."""
+  config_path = epath.Path(config_path)
+  if not config_path.exists():
+    raise ValueError(f'Config file not found at {config_path.as_posix()}')
+  return config_dict.create(**json.loads(config_path.read_text()))

@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Checkpointing for SAC."""
+"""Checkpointing for BC."""
 
 from typing import Any, Union
 
 from brax.training import checkpoint
 from brax.training import types
-from brax.training.agents.sac import networks as sac_networks
+from brax.training.agents.bc import networks as bc_networks
 from etils import epath
 from ml_collections import config_dict
 
-_CONFIG_FNAME = 'sac_network_config.json'
+_CONFIG_FNAME = 'bc_network_config.json'
 
 
 def save(
@@ -38,7 +38,7 @@ def save(
 def load(
     path: Union[str, epath.Path],
 ):
-  """Loads SAC checkpoint."""
+  """Loads checkpoint."""
   return checkpoint.load(path)
 
 
@@ -46,7 +46,7 @@ def network_config(
     observation_size: types.ObservationSize,
     action_size: int,
     normalize_observations: bool,
-    network_factory: types.NetworkFactory[sac_networks.SACNetworks],
+    network_factory: types.NetworkFactory[bc_networks.BCNetworks],
 ) -> config_dict.ConfigDict:
   """Returns a config dict for re-creating a network from a checkpoint."""
   return checkpoint.network_config(
@@ -54,18 +54,18 @@ def network_config(
   )
 
 
-def _get_network(
+def _get_bc_network(
     config: config_dict.ConfigDict,
-    network_factory: types.NetworkFactory[sac_networks.SACNetworks],
-) -> sac_networks.SACNetworks:
-  """Generates a SAC network given config."""
+    network_factory: types.NetworkFactory[bc_networks.BCNetworks],
+) -> bc_networks.BCNetworks:
+  """Generates a BC network given config."""
   return checkpoint.get_network(config, network_factory)  # pytype: disable=bad-return-type
 
 
 def load_config(
     path: Union[str, epath.Path],
 ) -> config_dict.ConfigDict:
-  """Loads SAC config from checkpoint."""
+  """Loads BC config from checkpoint."""
   path = epath.Path(path)
   config_path = path / _CONFIG_FNAME
   return checkpoint.load_config(config_path)
@@ -73,16 +73,17 @@ def load_config(
 
 def load_policy(
     path: Union[str, epath.Path],
-    network_factory: types.NetworkFactory[
-        sac_networks.SACNetworks
-    ] = sac_networks.make_sac_networks,
+    network_factory: types.NetworkFactory[bc_networks.BCNetworks],
     deterministic: bool = True,
 ):
-  """Loads policy inference function from SAC checkpoint."""
+  """Loads policy inference function from BC checkpoint.
+
+  The policy is always deterministic.
+  """
   path = epath.Path(path)
-  config = load_config(path)
+  config = load_config(path.parent)
   params = load(path)
-  sac_network = _get_network(config, network_factory)
-  make_inference_fn = sac_networks.make_inference_fn(sac_network)
+  bc_network = _get_bc_network(config, network_factory)
+  make_inference_fn = bc_networks.make_inference_fn(bc_network)
 
   return make_inference_fn(params, deterministic=deterministic)
