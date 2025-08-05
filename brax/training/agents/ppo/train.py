@@ -395,7 +395,14 @@ def train(
         randomization_fn,
     )
     if local_devices_to_use > 1:
-        reset_fn = jax.pmap(env.reset, axis_name=_PMAP_AXIS_NAME)
+        if USE_MINE:
+            reset_fn = jax.pmap(
+                env.reset,
+                axis_name=_PMAP_AXIS_NAME,
+                in_axes=(0, None)   # shard keys, replicate curriculum info
+            )
+        else:
+            reset_fn = jax.pmap(env.reset, axis_name=_PMAP_AXIS_NAME)
     else:
         if USE_MINE:
             reset_fn = jax.jit(jax.vmap(env.reset, (0, None)))
@@ -741,13 +748,21 @@ def train(
         training_state.params.value,
     ))
     policy_params_fn(current_step, make_policy, params)
-
+    if USE_MINE:
+        # This will implement a first order hit_ball metric. Mainly to remove training instability.
+        alpha = 0.3
+        last_hit_ball = 0#metrics.get("eval/episode_gameplay/hit_ball", 0)
+        
     for it in range(num_evals_after_init):
         logging.info('starting iteration %s %s', it, time.time() - xt)
 
         if USE_MINE:
             # --- NOTE: MINE ---
             training_progress = float(it / num_evals_after_init)
+            ball_hits_filtered = metrics.get("eval/episode_gameplay/hit_ball", 0) * alpha + last_hit_ball * (1 - alpha)
+            last_hit_ball = ball_hits_filtered
+            print(f"Ball hits filtered: {ball_hits_filtered}, training progress: {training_progress}")
+            
             curriculum_progress_info = CurriculumProgressInfo(
                 training_progress=jax.numpy.array(training_progress),
                 total_steps=jax.numpy.array(current_step),
@@ -756,6 +771,9 @@ def train(
                 ),
                 avg_episode_reward=jax.numpy.array(
                     metrics.get("eval/episode_reward", -jax.numpy.inf)
+                ),
+                avg_ball_hits=jax.numpy.array(
+                    ball_hits_filtered
                 ),
             )
 

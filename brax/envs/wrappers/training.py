@@ -305,14 +305,16 @@ class CurriculumProgressInfo:
     total_steps: jp.ndarray
     avg_episode_length: jp.ndarray
     avg_episode_reward: jp.ndarray
+    avg_ball_hits: jp.ndarray
 
     @classmethod
     def get_default(cls) -> Self:
-        return cls(jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(0.0))
+        return cls(jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(0.0))
 
     @classmethod
-    def get_default_with_progress(cls, progress: float):
-        return cls(jp.array(progress), jp.array(0.0), jp.array(0.0), jp.array(0.0))
+    def get_default_with_progress(cls, progress: float, ball_hits: float):
+        return cls(jp.array(progress), jp.array(0.0), jp.array(0.0), jp.array(0.0), jp.array(ball_hits))
+
 
 
 def broadcast_curriculum_progress_info(
