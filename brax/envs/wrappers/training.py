@@ -81,6 +81,9 @@ class EpisodeWrapper(Wrapper):
 
     def reset(self, rng: jax.Array) -> State:
         state = self.env.reset(rng)
+        # TODO: MINE
+        state.info['new_action'] = jp.ones(rng.shape[:-1], dtype=jp.int32)
+        #
         state.info["steps"] = jp.zeros(rng.shape[:-1])
         state.info["truncation"] = jp.zeros(rng.shape[:-1])
         # Keep separate record of episode done as state.info['done'] can be erased
@@ -128,8 +131,13 @@ class EpisodeWrapper(Wrapper):
         return state.replace(done=done)
 
     def step(self, state: State, action: jax.Array) -> State:
-        def f(carry, _):
+        def f(carry, i):
             state, metrics_acc = carry
+            
+            # Inform the env whether this is a new action or a repeated one
+            is_new_action = (i == 0).astype(jp.int32)
+            state.info["new_action"] = jp.ones_like(state.done, dtype=jp.int32) * is_new_action
+            
             new_state = self.env.step(state, action)
 
             new_metrics_acc = jax.tree.map(
@@ -139,7 +147,7 @@ class EpisodeWrapper(Wrapper):
 
         zeros_metrics = jax.tree.map(lambda m: jp.zeros_like(m), state.metrics)
         (state, summed_metrics), rewards = jax.lax.scan(
-            f, (state, zeros_metrics), (), self.action_repeat
+            f, (state, zeros_metrics), jp.arange(self.action_repeat)
         )
         state = state.replace(reward=jp.sum(rewards, axis=0))
         state = state.replace(metrics=summed_metrics)
